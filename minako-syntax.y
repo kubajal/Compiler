@@ -211,13 +211,13 @@ int result;
 		yyin = fopen(argv[1], "rt");
 		
 		if(yyin == 0){
-			printf("Too many arguments\n");
+			printf("Couldn not open the file.\n");
 			return -1;			
 		}
 		
 	}
 	else if(argc > 2 ){
-		printf("zu viele Argumente wurden eingegeben\n");
+		printf("To many arguments.\n");
 		return -1;
 	}	
 	result = yyparse();
