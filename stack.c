@@ -1,75 +1,76 @@
-/*Compilerbau, Sommersemester 2017, Gruppe 20: Wilhelm Bomke, Jakub Jalowiec & David Bachorska  */
+/***************************************************************************//**
+ * @file stack.c
+ * @author Dorian Weber
+ * @brief Implementation des generalisierten Stacks.
+ ******************************************************************************/
+
+#include "stack.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "stack.h"
+#include <assert.h>
 
-int stackInit(intstack_t* self) {         
-    if(self == NULL) {                                             
-    fprintf(stderr, "Error: NULL-Pointer, param self @ stackInit.\n");
-    return 1;
-    }
-    self->top = NULL;  /*initialisiert den Zeiger auf das oberste Stackelement mit NULL*/
-    return 0;
+/* ********************************************************* public functions */
+
+/* (die runden Klammern um einige Funktionsnamen sind notwendig, da Makros
+ * gleichen Namens existieren und der Präprozessor diese expandieren würde) */
+
+void*
+(stackInit)(unsigned int capacity, size_t size)
+{
+	stack_hdr_t* hdr = malloc(sizeof(*hdr) + size*capacity);
+	
+	if (hdr == NULL)
+		return NULL;
+	
+	hdr->len = 0;
+	hdr->cap = capacity;
+	
+	return hdr + 1;
 }
 
-void stackRelease(intstack_t * self) {
-    if(self->top == NULL) {
-        fprintf(stderr, "Error: Stack is empty. param self @ stackRelease \n");
-        exit(1);
-    }
-    stackelement_t * temp = NULL;  /*"Hilfszeiger" zum freigeben des dynamisch angeforderten Speichers*/
-    while(self->top) {
-        temp = self->top->ptr;
-        free(self);
-        self->top = temp;   
-    }
+void
+stackRelease(void* self)
+{
+	free(((stack_hdr_t*) self) - 1);
 }
 
-
-void stackPush(intstack_t* self, int i) {
-    stackelement_t * newElement = malloc(sizeof(stackelement_t));  /*Speicher für ein Stackelement anfordern*/
-    if(newElement == NULL) {
-        fprintf(stderr, "Error: Coudln't allocate memory @ stackPush. \n");
-        exit(1);
-    }
-    newElement->value = i;
-    newElement->ptr = self->top;
-    self->top = newElement;
-        
-    }
-
-
-int stackTop(const intstack_t* self) {
-    return self->top->value;  /*Gibt das oberste Element im Stack zurück*/
+void*
+(stackPush)(void* self, size_t size)
+{
+	stack_hdr_t* hdr = ((stack_hdr_t*) self) - 1;
+	
+	if (hdr->len == hdr->cap)
+	{
+		hdr->cap *= 2;
+		hdr = realloc(hdr, sizeof(*hdr) + size*hdr->cap);
+		
+		if (hdr == NULL)
+		{
+			fputs("out-of-memory error\n", stderr);
+			exit(-1);
+		}
+	}
+	
+	++hdr->len;
+	return hdr + 1;
 }
 
-int stackPop(intstack_t* self) {
-    if(self->top == NULL) {  /*Wenn der Stack kein Element mehr enthält kann kein Element mehr entfernt werden*/
-        fprintf(stderr, "Error: Stack is empty. param self @ stackPop \n");
-        exit(1);
-    }
-    int temp = self->top->value;
-    stackelement_t* tempp = self->top->ptr;
-    free(self->top);
-    self->top = tempp;
-    return temp;
+void
+(stackPop)(void* self)
+{
+	stack_hdr_t* hdr = ((stack_hdr_t*) self) - 1;
+	assert(hdr->len > 0);
+	--hdr->len;
 }
 
-int stackIsEmpty(const intstack_t* self) {
-    if(self->top == NULL) {  /*Wenn das oberste Stackelement == NULL dann ist der Stack leer*/
-        return 1;
-    }
-    return 0;
+int
+stackIsEmpty(const void* self)
+{
+	return ((stack_hdr_t*) self)[-1].len == 0;
 }
-void stackPrint(const intstack_t* self) {
-    if(self->top == NULL) {  /*Überprüfen ob der Stack leer ist*/
-        fprintf(stderr, "Error: Stack is empty. param self @ stackPrint \n");
-        exit(1);
-    }
-    stackelement_t * temp;
-    temp = self->top;
-    while(temp) {
-        printf("%i \n" ,temp->value);
-        temp = temp->ptr;
-    }
+
+unsigned int
+stackCount(const void* self)
+{
+	return ((stack_hdr_t*) self)[-1].len;
 }

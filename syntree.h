@@ -1,42 +1,204 @@
-/*Compilerbau, Sommersemester 2017, Gruppe 20: Wilhelm Bomke, Jakub Jalowiec & David Bachorska,  */
+/***************************************************************************//**
+ * @file syntree.h
+ * @author Dorian Weber
+ * @brief Enthält eine Datenstruktur für abstrakte Syntaxbäume.
+ * @details
+ * Hier ist ein Beispiel für die Konstruktion eines Syntaxbaumes:
+ * @code
+ * syntree_t ast;
+ * syntree_nid node;
+ * 
+ * syntreeInit(&ast);
+ * 
+ * node = syntreeNodeTag(&ast, SYNTREE_TAG_Times, syntreeNodeInteger(&ast, 6));
+ * syntreeNodeAppend(&ast, node, syntreeNodeInteger(&ast, 4));
+ * node = syntreeNodePair(&ast, SYNTREE_TAG_Plus, syntreeNodeInteger(&ast, 2), node);
+ * 
+ * syntreePrint(&ast, node, stdout, 0);
+ * syntreeRelease(&ast);
+ * @endcode
+ * mit der Ausgabe
+ * @code
+ * Plus {
+ *     Integer 2
+ *     Times {
+ *         Integer 6
+ *         Integer 4
+ *     }
+ * }
+ * @endcode
+ * 
+ * Mithilfe der Knoten-IDs, die Ein- und Ausgabewerte der konstruierenden
+ * Funktionen sind, kann die Datenstruktur vom Blatt zur Wurzel konstruiert
+ * werden. Alle Knotentypen werden in einer X-Liste deklariert und die Literale  
+ * (Blätter des abstrakten Syntaxbaumes) haben jeweils ein eigene
+ * Konstruktionsroutine, die den entsprechenden Wert als Parameter erhält.
+ * Knoten übernehmen im Falle von dynamisch allozierten Werten den Besitz und
+ * geben diese beim Abbau der Knoten selbständig frei.
+ ******************************************************************************/
+
 #ifndef SYNTREE_H_INCLUDED
 #define SYNTREE_H_INCLUDED
 
-#include <stdlib.h>
+/**@brief X-Liste aller benötigten Knotentypen für C1-Programme.
+ * @see https://en.wikipedia.org/wiki/X_Macro
+ */
+#define SYNTREE_NODE_LIST(NODE) \
+	/* Literale */ \
+	NODE(Integer) \
+	NODE(Float) \
+	NODE(Boolean) \
+	NODE(String) \
+	NODE(LocVar) \
+	NODE(GlobVar) \
+	/* Anweisungen */ \
+	NODE(Program) \
+	NODE(Function) \
+	NODE(Call) \
+	NODE(Sequence) \
+	NODE(If) \
+	NODE(For) \
+	NODE(DoWhile) \
+	NODE(While) \
+	NODE(Print) \
+	NODE(Assign) \
+	NODE(Return) \
+	/* Ausdrücke */ \
+	NODE(Cast) \
+	NODE(Plus) \
+	NODE(Minus) \
+	NODE(Times) \
+	NODE(Divide) \
+	NODE(LogOr) \
+	NODE(LogAnd) \
+	NODE(Uminus) \
+	NODE(Eqt) \
+	NODE(Neq) \
+	NODE(Leq) \
+	NODE(Geq) \
+	NODE(Lst) \
+	NODE(Grt)
 
-#define ERROR_ID -1
+/**@brief X-Liste aller eingebauten Datentypen für C1-Programme.
+ * @see https://en.wikipedia.org/wiki/X_Macro
+ */
+#define SYNTREE_TYPE_LIST(TYPE) \
+	TYPE(Void) \
+	TYPE(Boolean) \
+	TYPE(Integer) \
+	TYPE(Float) \
+	TYPE(String)
 
-/*Beschreibung der Implementation der Datenstruktur:
- Die Implementation benutzt 3 Typen von Strukturen:
- -syntree_t:repräsentiert den Syntaxbaum. syntree_t enthaelt zwei Zeiger(syntree_nlist_elem * first und syntree_nlist_elem * last), die die globale Liste von Knoten repräsentieren sowie eine Zahl(syntree_nid freeID), die die nächste freie Knotenidentifikationsnummer für den Baum speichert.
- -syntree_node: repräsentiert einen Knoten. Diese Struktur enthält: die Identifikationsnummer(syntree_nid ID), den Wert(int value), einen Zeiger auf die Eltern(syntree_node * parent) und zwei Zeiger(syntree_nlist_elem * first und syntree_nlist_elem * last), die die Liste von Kindern repräsentieren. Der Wert "-1"(oder first != last) heißt, dass der Knoten ein Listenknoten ist.
- -syntree_nlist_elem: repräsentiert ein Element in der dynamischen Liste. Die Struktur enthält: einen Zeiger auf das nächste Element in der Liste(synree_nlist_elem * next) und einen Zeiger(syntree_node * node) auf mit dem syntree_nlist_elem verbundenen Knoten.
- Achtung: eine leere Liste enthaelt nur ein triviales Element, welches das Ende der Liste repräsentiert.*/
+/* *** includes ************************************************************* */
+
+#include <stdio.h>
 
 /* *** structures *********************************************************** */
 
-typedef int syntree_nid;
+/* Vorwärtsdeklaration */
+struct symtab_symbol_s;
 
-typedef struct syntree_t
+#define TAG(NAME)  SYNTREE_TAG_ ## NAME,
+#define TYPE(NAME) SYNTREE_TYPE_ ## NAME,
+
+/**@brief Enumeration aller Knotenarten im Syntaxbaum.
+ */
+typedef enum syntree_node_tag_e
 {
-	struct syntree_nlist_elem *first, *last;                /* global node list */
-    int freeID;
+	SYNTREE_NODE_LIST(TAG)
+} syntree_node_tag;
+
+/**@brief Enumeration aller semantischen Knotentypen im Syntaxbaum.
+ */
+typedef enum syntree_node_type_e
+{
+	SYNTREE_TYPE_LIST(TYPE)
+} syntree_node_type;
+
+#undef TAG
+#undef TYPE
+
+/**@brief Eindeutiger Identifikator für einen Knoten in einem Syntaxbaum.
+ */
+typedef unsigned int syntree_nid;
+
+/**@brief Eine partitionierte Vereinigung für Knoten.
+ * @see https://en.wikipedia.org/wiki/Tagged_union
+ */
+typedef struct syntree_node_s
+{
+	/**@brief Knotentag.
+	 * @note Agiert in diesem Kontext als tag für die union.
+	 */
+	syntree_node_tag tag;
+	
+	/**@brief Knotentyp.
+	 */
+	syntree_node_type type;
+	
+	/**@brief Index des nächsten verbundenen Knoten.
+	 */
+	syntree_nid next;
+	
+	/**@brief Nutzlast des Knotens.
+	 */
+	union syntree_node_value_u {
+		/**@brief Boolesche Konstante.
+		 */
+		int boolean;
+		
+		/**@brief Integerkonstante.
+		 */
+		int integer;
+		
+		/**@brief Fließkommakonstante.
+		 */
+		float real;
+		
+		/**@brief Stringkonstante.
+		 */
+		char* string;
+		
+		/**@brief Variablenindex.
+		 */
+		int variable;
+		
+		/**@brief Funktion.
+		 */
+		struct {
+			syntree_nid body;     /**<@brief Funktionskörper. */
+			unsigned int locals;  /**<@brief Variablenanzahl. */
+		} function;
+		
+		/**@brief Programm.
+		 * @note Identisch mit der Struktur für Funktionen.
+		 */
+		struct {
+			syntree_nid body;     /**<@brief Programmkörper. */
+			unsigned int globals; /**<@brief Variablenanzahl. */
+		} program;
+		
+		/**@brief Behälter weiterer Knoten.
+		 */
+		struct {
+			syntree_nid first;   /**<@brief Erster Knoten. */
+			syntree_nid last;    /**<@brief Letzter Knoten. */
+		} container;
+	} value;
+} syntree_node_t;
+
+/**@brief Struktur des abstrakten Syntaxbaumes.
+ */
+typedef struct syntree_s
+{
+	/**@brief Knotenarray.
+	 * @note Der Knoten mit der ID 0 ist für die Wurzel reserviert.
+	 */
+	syntree_node_t* nodes;
+	
+	unsigned int len; /**<@brief Anzahl der allozierten Knoten. */
+	unsigned int cap; /**<@brief Kapazität des Knotenarrays. */
 } syntree_t;
-
-struct syntree_node
-{
-	syntree_nid ID;                                         /* ID=-1 <=> Listenknoten */
-    struct syntree_node *parent;
-    int value;
-	struct syntree_nlist_elem *first, *last;				/* children */
-};
-
-struct syntree_nlist_elem                                   /* element of a node list */
-{
-	struct syntree_node *node;
-	struct syntree_nlist_elem *next;
-};
-
 
 /* *** interface ************************************************************ */
 
@@ -54,54 +216,129 @@ syntreeInit(syntree_t* self);
 extern void
 syntreeRelease(syntree_t* self);
 
+/**@brief Gegeben eine Knoten-ID, ermittelt den entsprechenden Zeiger.
+ * @param self  der Syntaxbaum
+ * @param id    die Knoten-ID
+ * @return ein Zeiger auf den entsprechenden Knoten
+ */
+extern syntree_node_t*
+syntreeNodePtr(const syntree_t* self, syntree_nid id);
+
+/**@brief Gegeben einen Knotenzeiger, ermittelt die entsprechende ID.
+ * @param self  der Syntaxbaum
+ * @param node  der Zeiger auf einen Knoten in \p self
+ * @return die dazugehörige Knoten-ID
+ */
+extern syntree_nid
+syntreeNodeId(const syntree_t* self, const syntree_node_t* node);
+
+/**@brief Erstellt einen neuen Knoten mit einem Wahrheitswert als Inhalt.
+ * @param self  der Syntaxbaum
+ * @param flag  der Wahrheitswert
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeBoolean(syntree_t* self, int flag);
+
 /**@brief Erstellt einen neuen Knoten mit einem Zahlenwert als Inhalt.
  * @param self    der Syntaxbaum
  * @param number  die Zahl
- * @param ID des neu erstellten Knoten
+ * @return ID des neu erstellten Knoten
  */
 extern syntree_nid
-syntreeNodeNumber(syntree_t* self, int number);
+syntreeNodeInteger(syntree_t* self, int number);
+
+/**@brief Erstellt einen neuen Knoten mit einem Fließkommawert als Inhalt.
+ * @param self    der Syntaxbaum
+ * @param number  die Fließkommazahl
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeFloat(syntree_t* self, float number);
+
+/**@brief Erstellt einen neuen Knoten mit einer Zeichenkette als Inhalt.
+ * @param self  der Syntaxbaum
+ * @param text  die Zeichenkette
+ * @note \p text wird nicht kopiert, sondern übernommen;
+ *       der Syntaxbaum ist für die Freigabe zuständig
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeString(syntree_t* self, char* text);
+
+/**@brief Erstellt einen neuen Knoten für eine Variablenreferenz.
+ * @param self    der Syntaxbaum
+ * @param symbol  das Symbol aus der Symboltabelle
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeVariable(syntree_t* self, const struct symtab_symbol_s* symbol);
+
+/**@brief Erstellt einen neuen Knoten für eine Typkonvertierung.
+ * @param self    der Syntaxbaum
+ * @param target  der Zieltyp
+ * @param id      Knoten-ID des Operanden
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeCast(syntree_t* self, syntree_node_type target, syntree_nid id);
+
+/**@brief Erstellt einen leeren Containerknoten.
+ * @param self  die Symboltabelle
+ * @param tag   die Knotenart
+ * @return ID des neu erstellten Knoten
+ */
+extern syntree_nid
+syntreeNodeEmpty(syntree_t* self, syntree_node_tag tag);
 
 /**@brief Kapselt einen Knoten innerhalb eines anderen Knotens.
  * @param self  der Syntaxbaum
+ * @param tag   die Knotenart
  * @param id    der zu kapselnde Knoten
- * @param ID des neu erstellten Knoten
+ * @return ID des neu erstellten Knoten
  */
 extern syntree_nid
-syntreeNodeTag(syntree_t* self, syntree_nid id);
+syntreeNodeTag(syntree_t* self, syntree_node_tag tag, syntree_nid id);
 
 /**@brief Kapselt zwei Knoten innerhalb eines Knoten.
  * @param self  der Syntaxbaum
+ * @param tag   die Knotenart
  * @param id1   erster Knoten
  * @param id2   zweiter Knoten
- * @param ID des neu erstellten Knoten
+ * @return ID des neu erstellten Knoten
  */
 extern syntree_nid
-syntreeNodePair(syntree_t* self, syntree_nid id1, syntree_nid id2);
+syntreeNodePair(syntree_t* self, syntree_node_tag tag,
+                syntree_nid id1, syntree_nid id2);
 
 /**@brief Hängt einen Knoten an das Ende eines Listenknotens.
  * @param self  der Syntaxbaum
  * @param list  Listenknoten
  * @param elem  anzuhängender Knoten
- * @param ID des Listenknoten
+ * @return ID des Listenknoten
  */
 extern syntree_nid
 syntreeNodeAppend(syntree_t* self, syntree_nid list, syntree_nid elem);
 
-/**@brief Hängt einen Knoten an den Anfang eines Listenknotens.
- * @param self  der Syntaxbaum
- * @param elem  anzuhängender Knoten
- * @param list  Listenknoten
- * @param ID des Listenknoten
- */
-extern syntree_nid
-syntreeNodePrepend(syntree_t* self, syntree_nid elem, syntree_nid list);
-
 /**@brief Gibt alle Zahlenknoten rekursiv (depth-first) aus.
- * @param self  der Syntaxbaum
- * @param root  der Wurzelknoten
+ * @param self    der Syntaxbaum
+ * @param root    der Wurzelknoten
+ * @param out     der Ausgabestrom
+ * @param indent  initiale Einrückung
  */
 extern void
-syntreePrint(const syntree_t* self, syntree_nid root);
+syntreePrint(const syntree_t* self, syntree_nid root, FILE* out, int indent);
+
+/* *** external variables *************************************************** */
+
+/**@brief Konstantes Array, das von Knotentags auf Strings abbildet.
+ */
+extern const char* const
+nodeTagName[];
+
+/**@brief Konstantes Array, das von Knotentypen auf Strings abbildet.
+ */
+extern const char* const
+nodeTypeName[];
 
 #endif /* SYNTREE_H_INCLUDED */

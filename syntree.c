@@ -1,211 +1,352 @@
-/*Compilerbau, Sommersemester 2017, Gruppe 20: Wilhelm Bomke, Jakub Jalowiec & David Bachorska  */
+/***************************************************************************//**
+ * @file syntree.c
+ * @author Dorian Weber
+ * @brief Implementation des Syntaxbaumes.
+ ******************************************************************************/
+
 #include "syntree.h"
+#include "symtab.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
 
-int syntreeInit(syntree_t* self)
+/* ******************************************************** private functions */
+
+/**@internal
+ * @brief Macht Platz für einen neuen Knoten und gibt ihn zurück.
+ * @param self  Syntaxbaum
+ * @return ein frischer Knoten
+ */
+static syntree_node_t*
+syntreeNodeAlloc(syntree_t* self)
 {
-    self->first = malloc(sizeof(struct syntree_nlist_elem));
-    if(self->first == NULL)
-    {
-		fprintf(stderr, "Error: initializing global nodes list failed @ syntreeInit. Not enough memory?\n");
-        return 1;
-    }
-
-    self->first->next = NULL;
-    self->first->node = NULL;
-    self->last = self->first;
-    self->freeID = 1;
-
-    return 0;
-}
-
-struct syntree_node *find_by_id(const syntree_t *self, syntree_nid i)
-{
-    struct syntree_nlist_elem *it = self->first;
-    while(it != self->last)
-    {
-        if(it->node->ID == i)
-            return it->node;
-        it = it->next;
-    }
-    return NULL;
-}
-
-syntree_nid syntreeNodeNumber(syntree_t* self, int number)
-{
-    syntree_nid new_id = self->freeID++;
-    self->last->next = malloc(sizeof(struct syntree_nlist_elem));
-    if(self->last->next == NULL)
-    {
-		fprintf(stderr, "Error: creating a new node list element failed @ syntreeNodeNumber. Not enough memory?\n");
-		return ERROR_ID;
-    }
-
-	self->last->node = malloc(sizeof(struct syntree_node));
-	if(self->last->node == NULL)
+	syntree_node_t* node;
+	
+	if (self->len == self->cap)
 	{
-		fprintf(stderr, "Error: creating a new node failed @ syntreeNodeNumber. Not enough memory?\n");
-		return ERROR_ID;
+		self->cap *= 2;
+		node = realloc(self->nodes, sizeof(*self->nodes)*self->cap);
+		
+		if (node == NULL)
+		{
+			fputs("out-of-memory error\n", stderr);
+			exit(-1);
+		}
+		
+		self->nodes = node;
 	}
-
-    self->last->node->ID = new_id;
-    self->last->node->value = number;
-    self->last->node->parent = NULL;
-    self->last->node->first = malloc(sizeof(struct syntree_nlist_elem));
-    if(self->last->node->first == NULL)
-    {
-		fprintf(stderr, "Error: initalizing a new node's children list @ syntreeNodeNumber. Not enough memory?\n");
-		return ERROR_ID;
-    }
-    self->last->node->last = self->last->node->first;
-    self->last->node->first->next = NULL;
-    self->last->node->first->node = NULL;
-
-    self->last = self->last->next;
-	self->last->next = NULL;
-	self->last->node = NULL;
-
-    return new_id;
+	
+	node = &self->nodes[self->len];
+	node->next = 0;
+	++self->len;
+	return node;
 }
 
-syntree_nid syntreeNodeTag(syntree_t* self, syntree_nid id)
+/**@internal
+ * @brief Gibt Auskunft, ob ein Knoten zu den atomaren Knoten gehört.
+ * @param node  der Knoten
+ * @return 1, falls ja,\n
+ *         0, ansonsten
+ */
+static inline int
+syntreeIsPrimitive(const syntree_node_t* node)
 {
-    syntree_nid parent = syntreeNodeNumber(self,  -1);
-
-	if(parent == ERROR_ID)
+	switch (node->tag)
 	{
-		fprintf(stderr, "Error: creating the parent node failed @ syntreeNodeTag.\n");
-		return ERROR_ID;
+	case SYNTREE_TAG_Integer:
+	case SYNTREE_TAG_Float:
+	case SYNTREE_TAG_Boolean:
+	case SYNTREE_TAG_String:
+	case SYNTREE_TAG_LocVar:
+	case SYNTREE_TAG_GlobVar:
+		return 1;
+		
+	default:
+		return 0;
 	}
-
-	if(syntreeNodeAppend(self, parent, id) == ERROR_ID)
-	{
-		fprintf(stderr, "Error: linking nodes failed @ syntreeNodeTag.\n");
-		return ERROR_ID;
-	}
-
-    return parent;
 }
 
-syntree_nid syntreeNodePrepend(syntree_t* self, syntree_nid elem, syntree_nid list)     // Listenknotens (parents) de_list: old_first, ... , last
-{                                                                                       //                                  new_first, old_first, ... , last
-    struct syntree_node *parent = find_by_id(self, list);
-    if(parent == NULL)
-    {
-		fprintf(stderr, "Error: list node not found, id: %d @ syntreNodePrepend.\n", list);
-		return ERROR_ID;
-    }
-    struct syntree_node *inserted = find_by_id(self, elem);
-    if(inserted == NULL)
-    {
-		fprintf(stderr, "Error: failed to prepend node (id: %d) to the list node (id: %d). Node %d not found @ syntreNodePrepend.\n", elem, list, elem);
-		return ERROR_ID;
-    }
+/* ********************************************************* public functions */
 
-    struct syntree_nlist_elem *old_first = parent->first;
-    struct syntree_nlist_elem *new_first = malloc(sizeof(struct syntree_nlist_elem));
-    if(new_first == NULL)
-    {
-		fprintf(stderr, "Error: making place for a new node (id: %d) in the list node's (id: %d) children list failed @ syntreNodePrepend. Not enough memory?\n", elem, list);
-		return ERROR_ID;
-    }
-    new_first->node = inserted;
-    inserted->parent = parent;
-    new_first->next = old_first;
-    parent->first = new_first;
+/* constructor/destructor */
 
-    return list;
-}
-
-syntree_nid syntreeNodeAppend(syntree_t* self, syntree_nid list, syntree_nid elem)      // Listenknotens (parents) de_list: first, ..., old_last
-{                                                                                       //                                  first, ..., old_last(aka inserted), new_last
-    struct syntree_node *parent = find_by_id(self, list);
-    if(parent == NULL)
-    {
-		fprintf(stderr, "Error: list node not found, id: %d @ syntreNodeAppend.\n", list);
-		return ERROR_ID;
-    }
-    struct syntree_node *inserted = find_by_id(self, elem);
-	if(inserted == NULL)
-    {
-		fprintf(stderr, "Error: failed to append node (id: %d) to the list node (id: %d). Node %d not found @ syntreNodeAppend.\n", elem, list, elem);
-		return ERROR_ID;
-    }
-    struct syntree_nlist_elem *old_last = parent->last;
-    struct syntree_nlist_elem *new_last;
-
-    old_last->node = inserted;
-    inserted->parent = parent;
-    old_last->next = malloc(sizeof(struct syntree_nlist_elem));
-    new_last = old_last->next;
-    if(new_last == NULL)
-    {
-		fprintf(stderr, "Error: making place for a new node (id: %d) in the list node's (id: %d) children list failed @ syntreNodeAppend. Not enough memory?\n", elem, list);
-		return ERROR_ID;
-    }
-    new_last->node = NULL;
-    new_last->next = NULL;
-    parent->last = new_last;
-
-    return list;
-}
-
-syntree_nid syntreeNodePair(syntree_t* self, syntree_nid id1, syntree_nid id2)
+int
+syntreeInit(syntree_t* self)
 {
-    syntree_nid parent = syntreeNodeNumber(self, -1);
-	if(parent == ERROR_ID)
-	{
-		fprintf(stderr, "Error: creating parent failed @ syntreeNodePair.\n");
-		return ERROR_ID;
-	}
-	if(syntreeNodeAppend(self, parent, id1) == ERROR_ID)
-	{
-		fprintf(stderr, "Error: pairing %d failed (pairing with: %d) @ syntreeNodePair.\n", id1, id2);
-		return ERROR_ID;
-	}
-	if(syntreeNodeAppend(self, parent, id2) == ERROR_ID)
-	{
-		fprintf(stderr, "Error: pairing %d failed (pairing with: %d) @ syntreeNodePair.\n", id2, id1);
-		return ERROR_ID;
-	}
-    return parent;
+	/* erstelle die Baumstruktur */
+	self->len = 0;
+	self->cap = 8;
+	self->nodes = malloc(sizeof(*self->nodes)*self->cap);
+	
+	if (self->nodes == NULL)
+		return -1;
+	
+	syntreeNodeEmpty(self, SYNTREE_TAG_Program);
+	return 0;
 }
 
-void syntreePrint(const syntree_t* self, syntree_nid root)
+void
+syntreeRelease(syntree_t* self)
 {
-    struct syntree_node *cur = find_by_id(self, root);
-
-    struct syntree_nlist_elem *it = cur->first;
-    if(cur->first == cur->last)
-		printf("(%d)", cur->value);
-    else
-        printf("{");
-    while(it != cur->last)
-    {
-        syntreePrint(self, it->node->ID);
-        it = it->next;
-    }
-    if(cur->last != cur->first)
-        printf("}");
+	syntree_node_t *it, *end;
+	
+	/* gib den dynamisch allozierten Speicher aller Knoten frei */
+	for (it = self->nodes, end = it + self->len; it < end; ++it)
+	{
+		if (it->tag == SYNTREE_TAG_String)
+			free(it->value.string);
+	}
+	
+	/* gib die Knoten selbst frei */
+	free(self->nodes);
 }
 
-void syntreeRelease(syntree_t* self)
+/* node construction */
+
+syntree_node_t*
+syntreeNodePtr(const syntree_t* self, syntree_nid id)
 {
-    struct syntree_nlist_elem *it = self->first;
-    while(it != self->last)
-    {
-        struct syntree_nlist_elem *it1 = it->node->first;
-        while(it1 != it->node->last)
-        {
-            struct syntree_nlist_elem *tmp = it1->next;
-            free(it1);
-            it1 = tmp;
-        }
-		free(it1);	// it->node->last
-		free(it->node);
-		struct syntree_nlist_elem *tmp = it->next;
-        free(it);
-        it = tmp;
-    }
-	free(it);	// free last
+	return &self->nodes[id];
 }
+
+syntree_nid
+syntreeNodeId(const syntree_t* self, const syntree_node_t* node)
+{
+	return node - self->nodes;
+}
+
+syntree_nid
+syntreeNodeBoolean(syntree_t* self, int flag)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	node->tag = SYNTREE_TAG_Boolean;
+	node->type = SYNTREE_TYPE_Boolean;
+	node->value.boolean = flag;
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeInteger(syntree_t* self, int number)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	node->tag = SYNTREE_TAG_Integer;
+	node->type = SYNTREE_TYPE_Integer;
+	node->value.integer = number;
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeFloat(syntree_t* self, float number)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	node->tag = SYNTREE_TAG_Float;
+	node->type = SYNTREE_TYPE_Float;
+	node->value.real = number;
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeString(syntree_t* self, char* text)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	node->tag = SYNTREE_TAG_String;
+	node->type = SYNTREE_TYPE_String;
+	node->value.string = text;
+	
+	if (node->value.string == NULL)
+	{
+		fputs("out-of-memory error\n", stderr);
+		exit(-1);
+	}
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeVariable(syntree_t* self, const symtab_symbol_t* symbol)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	
+	if (symbol != NULL)
+	{
+		node->tag = symbol->is_global ? SYNTREE_TAG_GlobVar : SYNTREE_TAG_LocVar;
+		node->type = symbol->type;
+		node->value.variable = symbol->pos;
+	}
+	else
+	{
+		node->tag = SYNTREE_TAG_GlobVar;
+		node->type = SYNTREE_TYPE_Void;
+		node->value.variable = 0;
+	}
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeCast(syntree_t* self, syntree_node_type target, syntree_nid id)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	
+	node->tag = SYNTREE_TAG_Cast;
+	node->type = target;
+	node->value.container.first = node->value.container.last = id;
+	
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeEmpty(syntree_t* self, syntree_node_tag tag)
+{
+	return syntreeNodeTag(self, tag, 0);
+}
+
+syntree_nid
+syntreeNodeTag(syntree_t* self, syntree_node_tag tag, syntree_nid id)
+{
+	syntree_node_t* node = syntreeNodeAlloc(self);
+	
+	node->tag = tag;
+	node->type = SYNTREE_TYPE_Void;
+	node->value.container.first = node->value.container.last = id;
+	
+	assert(!syntreeIsPrimitive(node));
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodePair(syntree_t* self, syntree_node_tag tag,
+                syntree_nid id1, syntree_nid id2)
+{
+	syntree_node_t* node;
+	
+	/* ignoriere leere Knoten */
+	if (id1 == 0)
+		return syntreeNodeTag(self, tag, id2);
+	
+	if (id2 == 0)
+		return syntreeNodeTag(self, tag, id1);
+	
+	node = syntreeNodeAlloc(self);
+	node->tag = tag;
+	node->type = SYNTREE_TYPE_Void;
+	node->value.container.first = id1;
+	node->value.container.last = id2;
+	
+	syntreeNodePtr(self, id1)->next = id2;
+	
+	assert(!syntreeIsPrimitive(node));
+	return syntreeNodeId(self, node);
+}
+
+syntree_nid
+syntreeNodeAppend(syntree_t* self, syntree_nid listId, syntree_nid elemId)
+{
+	syntree_node_t* list = syntreeNodePtr(self, listId);
+	assert(!syntreeIsPrimitive(list));
+	
+	/* ignoriere leere Knoten */
+	if (elemId == 0)
+		return listId;
+	
+	/* teste, ob das Element das erste der Liste ist */
+	if (list->value.container.first)
+	{
+		syntreeNodePtr(self, list->value.container.last)->next = elemId;
+		list->value.container.last = elemId;
+	}
+	else
+	{
+		list->value.container.first = list->value.container.last = elemId;
+	}
+	
+	return listId;
+}
+
+/* misc routines */
+
+void
+syntreePrint(const syntree_t* self, syntree_nid root, FILE* out, int indent)
+{
+	syntree_node_t* node = syntreeNodePtr(self, root);
+	fprintf(out, "%*s", indent*4, "");
+	
+	switch (node->tag)
+	{
+	case SYNTREE_TAG_Integer:
+		fprintf(out, "Integer %i\n", node->value.integer);
+		break;
+		
+	case SYNTREE_TAG_Float:
+		fprintf(out, "Float %g\n", node->value.real);
+		break;
+		
+	case SYNTREE_TAG_Boolean:
+		fputs((node->value.boolean ? "true\n" : "false\n"), out);
+		break;
+		
+	case SYNTREE_TAG_String:
+		fprintf(out, "\"%s\"\n", node->value.string);
+		break;
+		
+	case SYNTREE_TAG_LocVar:
+	case SYNTREE_TAG_GlobVar:
+		fprintf(out, "%s %s [pos=%i]\n",
+		        node->tag == SYNTREE_TAG_LocVar ? "Local" : "Global",
+		        nodeTypeName[node->type], node->value.variable);
+		break;
+		
+	case SYNTREE_TAG_Call:
+		fprintf(out, "Call %s [nid=%i] {\n", nodeTypeName[node->type],
+		        node->value.container.last);
+		syntreePrint(self, node->value.container.first, out, indent+1);
+		fprintf(out, "%*s}\n", indent*4, "");
+		break;
+		
+	case SYNTREE_TAG_Program:
+		fprintf(out, "Program [globals=%u] {\n",
+		        node->value.program.globals);
+		syntreePrint(self, node->value.program.body, out, indent+1);
+		fprintf(out, "%*s}\n", indent*4, "");
+		break;
+		
+	case SYNTREE_TAG_Function:
+		fprintf(out, "%s Function [locals=%u] {\n",
+		        nodeTypeName[node->type], node->value.function.locals);
+		syntreePrint(self, node->value.function.body, out, indent+1);
+		fprintf(out, "%*s}\n", indent*4, "");
+		break;
+		
+	default:
+		if (node->type != SYNTREE_TYPE_Void)
+			fprintf(out, "%s ", nodeTypeName[node->type]);
+		
+		fprintf(out, "%s {\n", nodeTagName[node->tag]);
+		
+		for (root = node->value.container.first; root != 0;
+		     root = syntreeNodePtr(self, root)->next)
+		{
+			syntreePrint(self, root, out, indent + 1);
+		}
+		
+		fprintf(out, "%*s}\n", indent*4, "");
+	}
+}
+
+/* *** external variables *************************************************** */
+
+const char* const nodeTagName[] = {
+#define NAME(NODE) #NODE,
+	SYNTREE_NODE_LIST(NAME)
+#undef NAME
+};
+
+const char* const nodeTypeName[] = {
+#define NAME(NODE) #NODE,
+	SYNTREE_TYPE_LIST(NAME)
+#undef NAME
+};
