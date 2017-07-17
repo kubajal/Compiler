@@ -303,11 +303,11 @@ void main(){
 
 	printf("-----");
 	printf("(Pseudo) Random int [0,16383]");
-	printResultsI( rand(), 16167);
+	printResultsI( rand(), 16166);
 
 	printf("-----");
 	printf("Random float [0,1)" );
-	printResults(random(), 0.917786);
+	printResults(random(), 0.116638);
 
 	printf("Done :)");
 }
